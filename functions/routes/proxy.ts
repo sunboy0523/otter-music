@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { proxyGet, filterResponseHeaders } from "@utils/proxy";
+import { proxyGet } from "@utils/proxy";
 import type { Env } from "../types/hono";
 import { fail } from "@utils/response";
 
@@ -118,18 +118,10 @@ proxyRoutes.get("/", validator, async (c) => {
     );
     const response = await proxyGet(targetUrl, customHeaders);
 
-    // 过滤源站响应头，保留安全头（Accept-Ranges、Cache-Control、Content-Length 等）
-    const filteredHeaders = filterResponseHeaders(
-      new Headers(response.headers)
-    );
-    const finalHeaders = applyCommonHeaders(c, filteredHeaders, filename);
-    // 音频文件稳定不变，设置 24 小时缓存，减少重复请求
-    finalHeaders.set("Cache-Control", "public, max-age=86400");
-
     return new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
-      headers: finalHeaders,
+      headers: applyCommonHeaders(c, new Headers(response.headers), filename),
     });
   } catch (_e: any) {
     return handleError(c, _e);
