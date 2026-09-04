@@ -241,7 +241,15 @@ async function downloadNative(
   const musicPath = store.downloadDirectory || AppPaths.Music;
   await ensureDir(musicPath);
 
-  const filePath = `${musicPath}/${fileName}`;
+  // 目标文件已存在（如下载记录丢失后的残留文件）时自动追加序号，
+  // 避免覆盖冲突导致 FileTransfer 写入失败 (OS-PLUG-FLTR-0007)
+  const filePath = await resolveAvailableFilePath(musicPath, fileName);
+  if (filePath !== `${musicPath}/${fileName}`) {
+    logger.info("download", "downloadNative: renamed to avoid overwrite", {
+      fileName,
+      filePath,
+    });
+  }
   const fileUri = await Filesystem.getUri({
     directory: STORAGE_CONFIG.BASE_DIR,
     path: filePath,
@@ -439,6 +447,34 @@ export async function ensurePermission() {
   if (req.publicStorage !== "granted") {
     throw new Error("需要存储权限才能下载音乐");
   }
+}
+
+/**
+ * 解析一个当前不存在的目标文件路径：若同名文件已存在，
+ * 自动追加序号重命名（如 "歌名 (1).mp3"）。
+ */
+async function resolveAvailableFilePath(
+  musicPath: string,
+  fileName: string
+): Promise<string> {
+  const dotIdx = fileName.lastIndexOf(".");
+  const stem = dotIdx > 0 ? fileName.slice(0, dotIdx) : fileName;
+  const ext = dotIdx > 0 ? fileName.slice(dotIdx) : "";
+
+  let candidate = fileName;
+  for (let i = 1; i < 1000; i++) {
+    try {
+      await Filesystem.stat({
+        directory: STORAGE_CONFIG.BASE_DIR,
+        path: `${musicPath}/${candidate}`,
+      });
+      candidate = `${stem} (${i})${ext}`;
+    } catch {
+      // stat 失败说明文件不存在，可用
+      return `${musicPath}/${candidate}`;
+    }
+  }
+  return `${musicPath}/${candidate}`;
 }
 
 async function ensureDir(path: string) {
