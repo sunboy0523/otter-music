@@ -10,8 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   SPECIAL_CATS,
-  RECOMMEND_CATS,
-  ALIST_CAT,
+  resolveBarCategories,
   NON_BROWSE_CATEGORIES,
 } from "@/lib/netease/netease-cats";
 import {
@@ -35,7 +34,6 @@ import { PodcastSection } from "./PodcastSection";
 import { AlistSection } from "./AlistSection";
 import { BillboardSection } from "./BillboardSection";
 import { AwardsSection } from "./AwardsSection";
-import { useAlistStore } from "@/store/alist-store";
 import { logger } from "@/lib/logger";
 
 const PAGE_SIZE = 30;
@@ -65,7 +63,7 @@ export function PlaylistMarket() {
   const setFeaturedTab = useMusicStore((s) => s.setLastFeaturedTab);
   // 仅用于 Billboard 子 tab 的滚动位置 key
   const billboardGroup = useMusicStore((s) => s.lastBillboardGroup);
-  const alistServers = useAlistStore((s) => s.servers);
+  const playlistCategoryOrder = useMusicStore((s) => s.playlistCategoryOrder);
   const [searchInputValue, setSearchInputValue] = useState("");
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -251,14 +249,11 @@ export function PlaylistMarket() {
   );
 
   const displayFilters = useMemo(() => {
-    const hasAlistServer = alistServers.some((s) => !s.is_deleted);
-    const base = hasAlistServer
-      ? [...RECOMMEND_CATS, ALIST_CAT]
-      : [...RECOMMEND_CATS];
-    if (!activeCategory || base.some((f) => f.id === activeCategory))
-      return base;
-    return [...base, { id: activeCategory, name: activeCategory }];
-  }, [activeCategory, alistServers]);
+    const base = resolveBarCategories(playlistCategoryOrder);
+    const all = [...base.fixed, ...base.residents];
+    if (!activeCategory || all.some((f) => f.id === activeCategory)) return all;
+    return [...all, { id: activeCategory, name: activeCategory }];
+  }, [activeCategory, playlistCategoryOrder]);
 
   // Scroll active category into view
   useEffect(() => {

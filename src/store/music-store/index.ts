@@ -72,6 +72,7 @@ export const useMusicStore = create<MusicState>()(
         lastMineTab: state.lastMineTab,
         lastFeaturedTab: state.lastFeaturedTab,
         lastBillboardGroup: state.lastBillboardGroup,
+        playlistCategoryOrder: state.playlistCategoryOrder,
         enableAutoMatch: state.enableAutoMatch,
         autoMatchFavorites: state.autoMatchFavorites,
         autoMatchPlaylists: state.autoMatchPlaylists,
