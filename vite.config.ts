@@ -437,6 +437,20 @@ export default defineConfig({
           });
         },
       },
+      "^/api/qqmusic-soso": {
+        target: "https://c.y.qq.com",
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/api\/qqmusic-soso/, ""),
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq) => {
+            proxyReq.setHeader("Referer", "https://y.qq.com/");
+            proxyReq.setHeader(
+              "User-Agent",
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            );
+          });
+        },
+      },
       "^/api/qqmusic-lyric": {
         target: "https://c.y.qq.com",
         changeOrigin: true,

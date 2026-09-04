@@ -1,23 +1,26 @@
 import type { MusicTrack, SearchPageResult, SongLyric } from "@/types/music";
 import {
   type QqPlaylistDetail,
-  type QqSearchResponse,
+  type QqSosoSearchResponse,
   type QqVkeyResponse,
   QQ_API_URL,
   QQ_LYRIC_URL,
   QQ_REFERER,
+  QQ_SEARCH_BASE_URL,
   buildQqPlaylistApiPath,
+  buildQqSearchApiPath,
   buildVkeyRequestBody,
-  convertQqSearchSongToMusicTrack,
   convertQqSongToMusicTrack,
   decodeQqHtmlEntities,
   extractVkeyUrl,
   orderQqQualityKeys,
   parseQqPlaylistResponse,
+  parseQqSosoSearchResponse,
   qqBrToQualityKey,
 } from "@otter-music/shared";
 import { IS_NATIVE, IS_WEB_PROD, getApiUrl } from "@/lib/api/config";
 import { useQqStore } from "@/store/qq-store";
+import { logger } from "@/lib/logger";
 
 const QQ_PROXY_PREFIX = "/music-api/qqmusic";
 const NETWORK_TIMEOUT = 12000;
@@ -55,6 +58,10 @@ export {
   parseQqPlaylistResponse,
 };
 
+/**
+ * 带超时的 fetch。超时信号与外部传入的 AbortSignal 叠加,
+ * 任一触发都会中止请求 (不覆盖外部 signal)。
+ */
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
@@ -62,10 +69,17 @@ async function fetchWithTimeout(
 ) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeout);
+  const external = options.signal;
+  const onAbort = () => controller.abort();
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener("abort", onAbort);
+  }
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     window.clearTimeout(timer);
+    external?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -165,78 +179,65 @@ export async function searchQqMusic(
       body: JSON.stringify({ type: "search", query, page }),
       signal,
     });
-    if (!res.ok) return { items: [], hasMore: false };
+    if (!res.ok) {
+      logger.error("qqmusic", `QQ 搜索代理请求失败: HTTP ${res.status}`, {
+        query,
+        page,
+      });
+      return { items: [], hasMore: false };
+    }
     return res.json();
   }
 
   if (IS_NATIVE) {
     const { CapacitorHttp } = await import("@capacitor/core");
-    const { cookie } = useQqStore.getState();
     const res = await CapacitorHttp.request({
-      method: "POST",
-      url: QQ_API_URL,
-      headers: {
-        "Content-Type": "application/json",
-        Referer: QQ_REFERER,
-        "User-Agent": QQ_USER_AGENT,
-        Cookie: cookie || "uin=",
-      },
-      data: JSON.stringify({
-        req_1: {
-          method: "DoSearchForQQMusicDesktop",
-          module: "music.search.SearchCgiService",
-          param: {
-            num_per_page: PAGE_SIZE,
-            page_num: page,
-            query,
-            search_type: 0,
-          },
-        },
-      }),
+      method: "GET",
+      url: `${QQ_SEARCH_BASE_URL}${buildQqSearchApiPath(query, page, PAGE_SIZE)}`,
+      headers: { Referer: QQ_REFERER, "User-Agent": QQ_USER_AGENT },
     });
-    if (res.status >= 400) return { items: [], hasMore: false };
+    if (res.status >= 400) {
+      logger.error("qqmusic", `QQ 搜索失败: HTTP ${res.status}`, {
+        query,
+        page,
+      });
+      return { items: [], hasMore: false };
+    }
     const data =
       typeof res.data === "string"
-        ? (JSON.parse(res.data) as QqSearchResponse)
-        : (res.data as QqSearchResponse);
-    const list = data?.req_1?.data?.body?.song?.list || [];
-    const total = data?.req_1?.data?.meta?.sum || 0;
-    return {
-      items: list.map(convertQqSearchSongToMusicTrack),
-      hasMore: page * PAGE_SIZE < total,
-    };
+        ? (JSON.parse(res.data) as QqSosoSearchResponse)
+        : (res.data as QqSosoSearchResponse);
+    if (data.code !== 0) {
+      logger.error("qqmusic", `QQ 搜索失败: code=${data.code}`, {
+        query,
+        page,
+        message: data.message,
+      });
+    }
+    return parseQqSosoSearchResponse(data, page, PAGE_SIZE);
   }
 
-  // dev
-  const { cookie } = useQqStore.getState();
-  const res = await fetchWithTimeout(`/api/qqmusic-search/cgi-bin/musicu.fcg`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(cookie ? { "X-Real-Cookie": cookie } : {}),
-    },
-    body: JSON.stringify({
-      req_1: {
-        method: "DoSearchForQQMusicDesktop",
-        module: "music.search.SearchCgiService",
-        param: {
-          num_per_page: PAGE_SIZE,
-          page_num: page,
-          query,
-          search_type: 0,
-        },
-      },
-    }),
-    signal,
-  });
-  if (!res.ok) return { items: [], hasMore: false };
-  const data: QqSearchResponse = await res.json();
-  const list = data?.req_1?.data?.body?.song?.list || [];
-  const total = data?.req_1?.data?.meta?.sum || 0;
-  return {
-    items: list.map(convertQqSearchSongToMusicTrack),
-    hasMore: page * PAGE_SIZE < total,
-  };
+  // dev: 通过 Vite 代理 /api/qqmusic-soso → c.y.qq.com
+  const res = await fetchWithTimeout(
+    `/api/qqmusic-soso${buildQqSearchApiPath(query, page, PAGE_SIZE)}`,
+    { signal }
+  );
+  if (!res.ok) {
+    logger.error("qqmusic", `QQ 搜索失败: HTTP ${res.status}`, {
+      query,
+      page,
+    });
+    return { items: [], hasMore: false };
+  }
+  const data = (await res.json()) as QqSosoSearchResponse;
+  if (data.code !== 0) {
+    logger.error("qqmusic", `QQ 搜索失败: code=${data.code}`, {
+      query,
+      page,
+      message: data.message,
+    });
+  }
+  return parseQqSosoSearchResponse(data, page, PAGE_SIZE);
 }
 
 // --- QQ 音乐音频 URL (vkey 直连) ---
