@@ -223,20 +223,35 @@ export async function searchBilibiliVideos(
     return res.json();
   }
 
-  try {
-    const data = await fetchBilibiliJson<BilibiliSearchResponse>(
-      buildBilibiliSearchPath(keyword, page, rows)
+  // 单次搜索尝试。B 站会间歇性返回 412/HTML 风控页：
+  // HTTP >= 400 时 fetchBilibiliJson 返回 null，200 + HTML 时 JSON 解析抛异常
+  const attempt = async (): Promise<BilibiliSearchResponse | null> => {
+    try {
+      return await fetchBilibiliJson<BilibiliSearchResponse>(
+        buildBilibiliSearchPath(keyword, page, rows)
+      );
+    } catch {
+      return null;
+    }
+  };
+
+  let data = await attempt();
+  if (!data) {
+    // 命中风控：延迟后重试一次，避免偶发的「未找到可用音源」
+    logger.warn(
+      "bilibili-api",
+      "Bilibili search blocked by risk control, retrying",
+      {
+        keyword,
+        page,
+      }
     );
-    if (!data) return { items: [], hasMore: false };
-
-    const result = data
-      ? parseBilibiliSearchResponse(data, page, rows)
-      : { items: [], hasMore: false };
-
-    return result;
-  } catch {
-    return { items: [], hasMore: false };
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    data = await attempt();
   }
+  if (!data) return { items: [], hasMore: false };
+
+  return parseBilibiliSearchResponse(data, page, rows);
 }
 
 /**
